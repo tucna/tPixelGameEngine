@@ -406,16 +406,18 @@ namespace tDX // tucna - DirectX
 
 		void EngineThread();
 
-		// If anything sets this flag to false, the engine
-		// "should" shut down gracefully
+		// If anything sets this flag to false, the engine "should" shut down gracefully
 		static std::atomic<bool> bAtomActive;
+    // If anything sets this flag to true, the window resizing shoudl be handled
+    static std::atomic<bool> bAtomResize;
 
 		// Common initialisation functions
 		void tDX_UpdateMouse(int32_t x, int32_t y);
 		void tDX_UpdateMouseWheel(int32_t delta);
 		void tDX_UpdateWindowSize(int32_t x, int32_t y);
 		void tDX_UpdateViewport();
-		bool tDX_DirectXCreate();
+    void tDX_DirectXCreateResources();
+		bool tDX_DirectXCreateDevice();
 		void tDX_ConstructFontSheet();
 
 
@@ -618,7 +620,7 @@ namespace tDX
 			// Load sprite from file
 			bmp = Gdiplus::Bitmap::FromFile(ConvertS2W(sImageFile).c_str());
 		}
-		
+
 		if (bmp == nullptr) return tDX::NO_FILE;
 		width = bmp->GetWidth();
 		height = bmp->GetHeight();
@@ -705,7 +707,7 @@ namespace tDX
 	Pixel* Sprite::GetData() { return pColData; }
 
 	//==========================================================
-	// Resource Packs - Allows you to store files in one large 
+	// Resource Packs - Allows you to store files in one large
 	// scrambled file
 
 
@@ -1549,6 +1551,10 @@ namespace tDX
 		nWindowWidth = x;
 		nWindowHeight = y;
 		tDX_UpdateViewport();
+
+    // If device already exists recreate resources
+    if (m_d3dDevice)
+      bAtomResize = true;
 	}
 
 	void PixelGameEngine::tDX_UpdateMouseWheel(int32_t delta)
@@ -1582,7 +1588,10 @@ namespace tDX
 	void PixelGameEngine::EngineThread()
 	{
 		// Create DirectX device and related
-    tDX_DirectXCreate();
+    tDX_DirectXCreateDevice();
+
+    // Create resources changed when whindow size is changed
+    tDX_DirectXCreateResources();
 
     // VS setup
     {
@@ -1655,34 +1664,6 @@ namespace tDX
     sampDesc.MinLOD = 0;
     sampDesc.MaxLOD = 0;
 
-    // Texture setup
-    int32_t fWidth = pDefaultDrawTarget->width;
-    int32_t fHeight = pDefaultDrawTarget->height;
-    auto components = 4; // TUCNA RGBA
-
-    D3D11_TEXTURE2D_DESC textureDescription = {};
-    textureDescription.Width = fWidth;
-    textureDescription.Height = fHeight;
-
-    textureDescription.MipLevels = textureDescription.ArraySize = 1;
-    textureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    textureDescription.SampleDesc.Count = 1;
-    textureDescription.SampleDesc.Quality = 0;
-    textureDescription.Usage = D3D11_USAGE_DYNAMIC;
-    textureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    textureDescription.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    textureDescription.MiscFlags = 0;
-
-    D3D11_SUBRESOURCE_DATA initialTextureData;
-    initialTextureData.pSysMem = pDefaultDrawTarget->GetData();
-    initialTextureData.SysMemPitch = fWidth * components;
-    initialTextureData.SysMemSlicePitch = 0;
-
-    m_d3dDevice->CreateTexture2D(&textureDescription, &initialTextureData, m_texture.GetAddressOf());
-    m_d3dDevice->CreateShaderResourceView(m_texture.Get(), NULL, &m_textureView);
-
-    m_d3dContext->PSSetShaderResources(0, 1, m_textureView.GetAddressOf());
-
     //Create the sample state
     m_d3dDevice->CreateSamplerState(&sampDesc, m_samplerState.GetAddressOf());
 
@@ -1696,12 +1677,6 @@ namespace tDX
     m_d3dContext->IASetInputLayout(m_inputLayout.Get());
 
     m_d3dContext->PSSetSamplers(0, 1, m_samplerState.GetAddressOf());
-
-    m_d3dContext->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), NULL);
-
-    // Set the viewport.
-    CD3D11_VIEWPORT viewport(static_cast<float>(nViewX), static_cast<float>(nViewY), static_cast<float>(nViewW), static_cast<float>(nViewH));
-    m_d3dContext->RSSetViewports(1, &viewport);
 
 		// Create user resources as part of this thread
 		if (!OnUserCreate())
@@ -1722,6 +1697,13 @@ namespace tDX
 
 				// Our time per frame coefficient
 				float fElapsedTime = elapsedTime.count();
+
+        // Handle resize if needed
+        if (bAtomResize)
+        {
+          tDX_DirectXCreateResources();
+          bAtomResize = false;
+        }
 
 				// Handle User Input - Keyboard
 				for (int i = 0; i < 256; i++)
@@ -1927,8 +1909,6 @@ namespace tDX
 			if (!GetMonitorInfo(hmon, &mi)) return NULL;
 			nWindowWidth = mi.rcMonitor.right;
 			nWindowHeight = mi.rcMonitor.bottom;
-
-
 		}
 
 		tDX_UpdateViewport();
@@ -1979,7 +1959,107 @@ namespace tDX
 		return tDX_hWnd;
 	}
 
-	bool PixelGameEngine::tDX_DirectXCreate()
+  void PixelGameEngine::tDX_DirectXCreateResources()
+  {
+    // Clear the previous window size specific context.
+    ID3D11RenderTargetView* nullViews[] = { nullptr };
+    m_d3dContext->OMSetRenderTargets(_countof(nullViews), nullViews, nullptr);
+    m_renderTargetView.Reset();
+    m_d3dContext->Flush();
+
+    UINT backBufferWidth = static_cast<UINT>(nWindowWidth);
+    UINT backBufferHeight = static_cast<UINT>(nWindowHeight);
+    DXGI_FORMAT backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM; // TUCNA opravdu BGRA ?
+    UINT backBufferCount = 2;
+
+    // Swapchain handling
+    // If the swap chain already exists, resize it, otherwise create one.
+    if (m_swapChain)
+    {
+      m_swapChain->ResizeBuffers(backBufferCount, backBufferWidth, backBufferHeight, backBufferFormat, 0);
+    }
+    else
+    {
+      // First, retrieve the underlying DXGI Device from the D3D Device.
+      Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+      m_d3dDevice.As(&dxgiDevice);
+
+      // Identify the physical adapter (GPU or card) this device is running on.
+      Microsoft::WRL::ComPtr<IDXGIAdapter> dxgiAdapter;
+      dxgiDevice->GetAdapter(dxgiAdapter.GetAddressOf());
+
+      // And obtain the factory object that created it.
+      Microsoft::WRL::ComPtr<IDXGIFactory2> dxgiFactory;
+      dxgiAdapter->GetParent(IID_PPV_ARGS(dxgiFactory.GetAddressOf()));
+
+      // Create a descriptor for the swap chain.
+      DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
+      swapChainDesc.Width = backBufferWidth;
+      swapChainDesc.Height = backBufferHeight;
+      swapChainDesc.Format = backBufferFormat;
+      swapChainDesc.SampleDesc.Count = 1;
+      swapChainDesc.SampleDesc.Quality = 0;
+      swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+      swapChainDesc.BufferCount = backBufferCount;
+
+      DXGI_SWAP_CHAIN_FULLSCREEN_DESC fsSwapChainDesc = {};
+      fsSwapChainDesc.Windowed = TRUE;
+
+      // Create a SwapChain from a Win32 window.
+      dxgiFactory->CreateSwapChainForHwnd(
+        m_d3dDevice.Get(),
+        tDX_hWnd,
+        &swapChainDesc,
+        &fsSwapChainDesc,
+        nullptr,
+        m_swapChain.ReleaseAndGetAddressOf()
+      );
+
+      dxgiFactory->MakeWindowAssociation(tDX_hWnd, DXGI_MWA_NO_ALT_ENTER);
+    }
+
+    // Obtain the backbuffer for this window which will be the final 3D rendertarget.
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
+    m_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf()));
+
+    // Create a view interface on the rendertarget to use on bind.
+    m_d3dDevice->CreateRenderTargetView(backBuffer.Get(), nullptr, m_renderTargetView.ReleaseAndGetAddressOf());
+    m_d3dContext->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), NULL);
+
+    // Texture setup
+    int32_t fWidth = pDefaultDrawTarget->width;
+    int32_t fHeight = pDefaultDrawTarget->height;
+    auto components = 4; // TUCNA RGBA
+
+    D3D11_TEXTURE2D_DESC textureDescription = {};
+    textureDescription.Width = fWidth;
+    textureDescription.Height = fHeight;
+
+    textureDescription.MipLevels = textureDescription.ArraySize = 1;
+    textureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    textureDescription.SampleDesc.Count = 1;
+    textureDescription.SampleDesc.Quality = 0;
+    textureDescription.Usage = D3D11_USAGE_DYNAMIC;
+    textureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    textureDescription.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    textureDescription.MiscFlags = 0;
+
+    D3D11_SUBRESOURCE_DATA initialTextureData;
+    initialTextureData.pSysMem = pDefaultDrawTarget->GetData();
+    initialTextureData.SysMemPitch = fWidth * components;
+    initialTextureData.SysMemSlicePitch = 0;
+
+    m_d3dDevice->CreateTexture2D(&textureDescription, &initialTextureData, m_texture.GetAddressOf());
+    m_d3dDevice->CreateShaderResourceView(m_texture.Get(), NULL, &m_textureView);
+
+    m_d3dContext->PSSetShaderResources(0, 1, m_textureView.GetAddressOf());
+
+    // Set the viewport
+    CD3D11_VIEWPORT viewport(static_cast<float>(nViewX), static_cast<float>(nViewY), static_cast<float>(nViewW), static_cast<float>(nViewH));
+    m_d3dContext->RSSetViewports(1, &viewport);
+  }
+
+	bool PixelGameEngine::tDX_DirectXCreateDevice()
 	{
     UINT creationFlags = 0;
 
@@ -1999,63 +2079,6 @@ namespace tDX
       NULL,
       m_d3dContext.ReleaseAndGetAddressOf()
     );
-
-    // Clear the previous window size specific context.
-    ID3D11RenderTargetView* nullViews[] = { nullptr };
-    m_d3dContext->OMSetRenderTargets(_countof(nullViews), nullViews, nullptr);
-    m_renderTargetView.Reset();
-    m_d3dContext->Flush();
-
-    UINT backBufferWidth = static_cast<UINT>(nWindowWidth); // TUCNA opravdu nViewW?
-    UINT backBufferHeight = static_cast<UINT>(nWindowHeight);
-    DXGI_FORMAT backBufferFormat = DXGI_FORMAT_B8G8R8A8_UNORM; // TUCNA opravdu BGRA ?
-    UINT backBufferCount = 2;
-
-    // Swapchain creation
-    // First, retrieve the underlying DXGI Device from the D3D Device.
-    Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
-    m_d3dDevice.As(&dxgiDevice);
-
-    // Identify the physical adapter (GPU or card) this device is running on.
-    Microsoft::WRL::ComPtr<IDXGIAdapter> dxgiAdapter;
-    dxgiDevice->GetAdapter(dxgiAdapter.GetAddressOf());
-
-    // And obtain the factory object that created it.
-    Microsoft::WRL::ComPtr<IDXGIFactory2> dxgiFactory;
-    dxgiAdapter->GetParent(IID_PPV_ARGS(dxgiFactory.GetAddressOf()));
-
-    // Create a descriptor for the swap chain.
-    DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
-    swapChainDesc.Width = backBufferWidth;
-    swapChainDesc.Height = backBufferHeight;
-    swapChainDesc.Format = backBufferFormat;
-    swapChainDesc.SampleDesc.Count = 1;
-    swapChainDesc.SampleDesc.Quality = 0;
-    swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    swapChainDesc.BufferCount = backBufferCount;
-
-    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fsSwapChainDesc = {};
-    fsSwapChainDesc.Windowed = TRUE;
-
-    // Create a SwapChain from a Win32 window.
-    dxgiFactory->CreateSwapChainForHwnd(
-      m_d3dDevice.Get(),
-      tDX_hWnd,
-      &swapChainDesc,
-      &fsSwapChainDesc,
-      nullptr,
-      m_swapChain.ReleaseAndGetAddressOf()
-    );
-
-    // This template does not support exclusive fullscreen mode and prevents DXGI from responding to the ALT+ENTER shortcut.
-    dxgiFactory->MakeWindowAssociation(tDX_hWnd, DXGI_MWA_NO_ALT_ENTER);
-
-    // Obtain the backbuffer for this window which will be the final 3D rendertarget.
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
-    m_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf()));
-
-    // Create a view interface on the rendertarget to use on bind.
-    m_d3dDevice->CreateRenderTargetView(backBuffer.Get(), nullptr, m_renderTargetView.ReleaseAndGetAddressOf());
 
 		return true; // Return TRUE is good?
 	}
@@ -2086,19 +2109,19 @@ namespace tDX
 			sge->tDX_UpdateMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam));
 			return 0;
 		}
-		case WM_MOUSELEAVE: sge->bHasMouseFocus = false;							return 0;
-		case WM_SETFOCUS:	sge->bHasInputFocus = true;								  return 0;
-		case WM_KILLFOCUS:	sge->bHasInputFocus = false;							return 0;
-		case WM_KEYDOWN:	sge->pKeyNewState[mapKeys[wParam]] = true;  return 0;
-		case WM_KEYUP:		sge->pKeyNewState[mapKeys[wParam]] = false;	return 0;
-		case WM_LBUTTONDOWN:sge->pMouseNewState[0] = true;						return 0;
-		case WM_LBUTTONUP:	sge->pMouseNewState[0] = false;						return 0;
-		case WM_RBUTTONDOWN:sge->pMouseNewState[1] = true;						return 0;
-		case WM_RBUTTONUP:	sge->pMouseNewState[1] = false;						return 0;
-		case WM_MBUTTONDOWN:sge->pMouseNewState[2] = true;						return 0;
-		case WM_MBUTTONUP:	sge->pMouseNewState[2] = false;						return 0;
-		case WM_CLOSE:		bAtomActive = false;									      return 0;
-		case WM_DESTROY:	PostQuitMessage(0);										      return 0;
+		case WM_MOUSELEAVE: sge->bHasMouseFocus = false; return 0;
+		case WM_SETFOCUS:	  sge->bHasInputFocus = true;	return 0;
+		case WM_KILLFOCUS:	sge->bHasInputFocus = false; return 0;
+		case WM_KEYDOWN:	  sge->pKeyNewState[mapKeys[wParam]] = true; return 0;
+		case WM_KEYUP:		  sge->pKeyNewState[mapKeys[wParam]] = false; return 0;
+		case WM_LBUTTONDOWN:sge->pMouseNewState[0] = true; return 0;
+		case WM_LBUTTONUP:	sge->pMouseNewState[0] = false; return 0;
+		case WM_RBUTTONDOWN:sge->pMouseNewState[1] = true; return 0;
+		case WM_RBUTTONUP:	sge->pMouseNewState[1] = false; return 0;
+		case WM_MBUTTONDOWN:sge->pMouseNewState[2] = true; return 0;
+		case WM_MBUTTONUP:	sge->pMouseNewState[2] = false;	return 0;
+		case WM_CLOSE:		  bAtomActive = false; return 0;
+		case WM_DESTROY:	  PostQuitMessage(0); return 0;
 		}
 		return DefWindowProc(hWnd, uMsg, wParam, lParam);
 	}
@@ -2107,6 +2130,7 @@ namespace tDX
 	// Need a couple of statics as these are singleton instances
 	// read from multiple locations
 	std::atomic<bool> PixelGameEngine::bAtomActive{ false };
+  std::atomic<bool> PixelGameEngine::bAtomResize{ false };
 	std::map<size_t, uint8_t> PixelGameEngine::mapKeys;
 	tDX::PixelGameEngine* tDX::PGEX::pge = nullptr;
 #ifdef T_DBG_OVERDRAW
