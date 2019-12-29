@@ -50,7 +50,7 @@ int main()
 
 ```
 
-In your class overload `OnUserUpdate` method, in a `main` create object, call `Construct` and `Start` in the end. That's all.
+In your class overload `OnUserUpdate` method, in `main` create object, call `Construct` and `Start` in the end. That's all.
 
 You can read original documentation [here](https://github.com/OneLoneCoder/olcPixelGameEngine/wiki).
 
