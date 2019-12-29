@@ -1,7 +1,7 @@
 # tPixelGameEngine
 Simple engine based on **Javidx9**'s `oclPixelGameEngine` - https://github.com/OneLoneCoder/olcPixelGameEngine
 
-The biggest difference in comparisson with the original is *DirectX 11* based rendering instead of *OpenGL*. Because of that it is necessary to distribute shader binaries together with the engine file.
+The biggest difference in comparisson with the original is *DirectX 11* based rendering instead of *OpenGL*. Because of that it is necessary to distribute shader binaries together with the engine file. Also, keep in mind that as a result of the switch to *DirectX* all `linux` related parts of code become unsuable thus they were deleted.
 
 # Usage
 Usage is the same as for the original version. You should add the header file from `engine` folder to your project and also you **must put there two shader files `vs.cso` and `ps.cso`**. After that you should write a new class, derive from `tDX::PixelGameEngine` and that is basically it. Check a code:
