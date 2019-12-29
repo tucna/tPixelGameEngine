@@ -1,10 +1,7 @@
-//#define OLC_PGE_APPLICATION
-//#include "olcPixelGameEngine.h"
-
 #define T_PGE_APPLICATION
 #include "tPixelGameEngine.h"
 
-class Example : public tDX::PixelGameEngine //public olc::PixelGameEngine
+class Example : public tDX::PixelGameEngine
 {
 public:
 	Example()
@@ -25,6 +22,9 @@ public:
     for (int x = 0; x < ScreenWidth(); x++)
       for (int y = 0; y < ScreenHeight(); y++)
         Draw(x, y, tDX::Pixel(rand() % 255, rand() % 255, rand() % 255));
+
+    DrawString(5,5, "TUCNA");
+
 		return true;
 	}
 };
@@ -33,7 +33,7 @@ public:
 int main()
 {
 	Example demo;
-	if (demo.Construct(256, 240, 4, 4))
+	if (demo.Construct(250, 250, 4, 4))
 		demo.Start();
 
 	return 0;

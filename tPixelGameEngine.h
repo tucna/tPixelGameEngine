@@ -390,17 +390,16 @@ namespace tDX // tucna - DirectX
     bool		pMouseOldState[5]{ 0 };
     HWButton	pMouseState[5];
 
-    Microsoft::WRL::ComPtr<ID3D11Device>           m_d3dDevice; // TUCNA maybe this m_ is stupid
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext>    m_d3dContext;
-    Microsoft::WRL::ComPtr<IDXGISwapChain1>        m_swapChain;
-    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_renderTargetView;
-    Microsoft::WRL::ComPtr<ID3D11PixelShader>      m_pixelShader;
-    Microsoft::WRL::ComPtr<ID3D11VertexShader>     m_vertexShader;
-    Microsoft::WRL::ComPtr<ID3D11InputLayout>      m_inputLayout;
-    Microsoft::WRL::ComPtr<ID3D11Buffer>           m_vertexBuffer;
-    Microsoft::WRL::ComPtr<ID3D11Buffer>           m_indexBuffer;
-    Microsoft::WRL::ComPtr<ID3D11SamplerState>     m_samplerState;
-    // TUCNA - is this good?
+    Microsoft::WRL::ComPtr<ID3D11Device>              m_d3dDevice;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext>       m_d3dContext;
+    Microsoft::WRL::ComPtr<IDXGISwapChain1>           m_swapChain;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView>    m_renderTargetView;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader>         m_pixelShader;
+    Microsoft::WRL::ComPtr<ID3D11VertexShader>        m_vertexShader;
+    Microsoft::WRL::ComPtr<ID3D11InputLayout>         m_inputLayout;
+    Microsoft::WRL::ComPtr<ID3D11Buffer>              m_vertexBuffer;
+    Microsoft::WRL::ComPtr<ID3D11Buffer>              m_indexBuffer;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState>        m_samplerState;
     Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_texture;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>  m_textureView;
 
@@ -424,14 +423,14 @@ namespace tDX // tucna - DirectX
 #if defined(_WIN32)
     // Windows specific window handling
     HWND tDX_hWnd = nullptr;
-    HWND tDX_WindowCreate(); // TUCNA - nemusi vracet handle
+    HWND tDX_WindowCreate();
     std::wstring wsAppName;
     static LRESULT CALLBACK tDX_WindowEvent(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 #endif
   };
 
 
-  class PGEX // TUCNA kicked out the singleton
+  class PGEX
   {
     friend class tDX::PixelGameEngine;
   protected:
@@ -613,7 +612,7 @@ namespace tDX
     {
       // Load sprite from input stream
       ResourceBuffer rb = pack->GetFileBuffer(sImageFile);
-      bmp = Gdiplus::Bitmap::FromStream(SHCreateMemStream((BYTE*)rb.vMemory.data(), rb.vMemory.size()));
+      bmp = Gdiplus::Bitmap::FromStream(SHCreateMemStream((BYTE*)rb.vMemory.data(), (UINT)rb.vMemory.size()));
     }
     else
     {
@@ -666,13 +665,14 @@ namespace tDX
     nOverdrawCount++;
 #endif
 
-    if (x >= 0 && x < width && y >= 0 && y < height)
-    {
+    // This check is too expensive
+    //if (x >= 0 && x < width && y >= 0 && y < height)
+    //{
       pColData[y*width + x] = p;
       return true;
-    }
-    else
-      return false;
+    //}
+    //else
+    //  return false;
   }
 
   Pixel Sprite::Sample(float x, float y)
@@ -786,7 +786,7 @@ namespace tDX
     // Iterate through map
     uint32_t nIndexSize = 0; // Unknown for now
     ofs.write((char*)&nIndexSize, sizeof(uint32_t));
-    uint32_t nMapSize = mapFiles.size();
+    size_t nMapSize = mapFiles.size();
     ofs.write((char*)&nMapSize, sizeof(uint32_t));
     for (auto &e : mapFiles)
     {
@@ -911,11 +911,7 @@ namespace tDX
     nScreenHeight = h;
     pDefaultDrawTarget = new Sprite(nScreenWidth, nScreenHeight);
     SetDrawTarget(nullptr);
-    //glClear(GL_COLOR_BUFFER_BIT); TUCNA
 
-    //SwapBuffers(glDeviceContext); TUCNA
-
-    //glClear(GL_COLOR_BUFFER_BIT); TUCNA
     tDX_UpdateViewport();
   }
 
@@ -1795,10 +1791,8 @@ namespace tDX
         if (!OnUserUpdate(fElapsedTime))
           bAtomActive = false;
 
-        D3D11_MAPPED_SUBRESOURCE mappedResource;
-        m_d3dContext->Map(m_texture.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
-        memcpy(mappedResource.pData, pDefaultDrawTarget->GetData(), pDefaultDrawTarget->width * pDefaultDrawTarget->height * 4);
-        m_d3dContext->Unmap(m_texture.Get(), 0);
+        // TODO: UpdateSubresource is not optimal here, Map would be better
+        m_d3dContext->UpdateSubresource(m_texture.Get(), 0, NULL, pDefaultDrawTarget->GetData(), pDefaultDrawTarget->width * 4, 0);
 
         m_d3dContext->DrawIndexed(6, 0, 0);
         m_swapChain->Present(0, 0);
@@ -1835,7 +1829,6 @@ namespace tDX
       }
     }
 
-    //wglDeleteContext(glRenderContext); TUCNA
     PostMessage(tDX_hWnd, WM_DESTROY, 0, 0);
   }
 
@@ -1939,8 +1932,6 @@ namespace tDX
       nWindowHeight = mi.rcMonitor.bottom;
     }
 
-    tDX_UpdateViewport();
-
     // Keep client size as requested
     RECT rWndRect = { 0, 0, nWindowWidth, nWindowHeight };
     AdjustWindowRectEx(&rWndRect, dwStyle, FALSE, dwExStyle);
@@ -1997,7 +1988,7 @@ namespace tDX
 
     UINT backBufferWidth = static_cast<UINT>(nWindowWidth);
     UINT backBufferHeight = static_cast<UINT>(nWindowHeight);
-    DXGI_FORMAT backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM; // TUCNA opravdu BGRA ?
+    DXGI_FORMAT backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     UINT backBufferCount = 2;
 
     // Swapchain handling
@@ -2057,7 +2048,7 @@ namespace tDX
     // Texture setup
     int32_t fWidth = pDefaultDrawTarget->width;
     int32_t fHeight = pDefaultDrawTarget->height;
-    auto components = 4; // TUCNA RGBA
+    auto components = 4; // RGBA
 
     D3D11_TEXTURE2D_DESC textureDescription = {};
     textureDescription.Width = fWidth;
@@ -2067,7 +2058,7 @@ namespace tDX
     textureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     textureDescription.SampleDesc.Count = 1;
     textureDescription.SampleDesc.Quality = 0;
-    textureDescription.Usage = D3D11_USAGE_DYNAMIC;
+    textureDescription.Usage = D3D11_USAGE_DEFAULT; //D3D11_USAGE_DYNAMIC;
     textureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     textureDescription.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     textureDescription.MiscFlags = 0;
@@ -2100,7 +2091,7 @@ namespace tDX
       D3D_DRIVER_TYPE_HARDWARE,
       nullptr,
       creationFlags,
-      NULL, // TUCNA feature level neni potreba
+      NULL,
       0,
       D3D11_SDK_VERSION,
       m_d3dDevice.ReleaseAndGetAddressOf(),
