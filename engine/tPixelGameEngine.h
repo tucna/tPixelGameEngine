@@ -78,10 +78,6 @@
 #include <sstream>
 #include <chrono>
 #include <vector>
-#include <list>
-#include <thread>
-#include <atomic>
-#include <condition_variable>
 #include <fstream>
 #include <map>
 #include <functional>
@@ -445,12 +441,10 @@ namespace tDX // tucna - DirectX
     Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_texture;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>  m_textureView;
 
-    void EngineThread();
-
     // If anything sets this flag to false, the engine "should" shut down gracefully
-    static std::atomic<bool> bAtomActive;
+    static bool bActive;
     // If anything sets this flag to true, the window resizing shoudl be handled
-    static std::atomic<bool> bAtomResize;
+    static bool bResize;
 
     // Common initialisation functions
     void tDX_UpdateMouse(int32_t x, int32_t y);
@@ -969,22 +963,234 @@ namespace tDX
     // Create resources changed when whindow size is changed
     tDX_DirectXCreateResources();
 
-    // Start the thread
-    bAtomActive = true;
-    std::thread t = std::thread(&PixelGameEngine::EngineThread, this);
-
-#if defined(_WIN32)
-    // Handle Windows Message Loop
-    MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0) > 0)
+    // VS setup
     {
-      TranslateMessage(&msg);
-      DispatchMessage(&msg);
+      Microsoft::WRL::ComPtr<ID3DBlob> blob;
+      D3DReadFileToBlob(L"vs.cso", &blob);
+
+      m_d3dDevice->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, m_vertexShader.GetAddressOf());
+
+      const D3D11_INPUT_ELEMENT_DESC ied[] =
+      {
+        { "Position",0,DXGI_FORMAT_R32G32B32_FLOAT,0,D3D11_APPEND_ALIGNED_ELEMENT,D3D11_INPUT_PER_VERTEX_DATA,0 },
+        { "TexCoord",0,DXGI_FORMAT_R32G32_FLOAT   ,0,D3D11_APPEND_ALIGNED_ELEMENT,D3D11_INPUT_PER_VERTEX_DATA,0 }
+      };
+
+      m_d3dDevice->CreateInputLayout(ied, (UINT)std::size(ied), blob->GetBufferPointer(), blob->GetBufferSize(), m_inputLayout.GetAddressOf());
+      m_d3dContext->VSSetShader(m_vertexShader.Get(), NULL, 0);
     }
+
+    // PS setup
+    {
+      Microsoft::WRL::ComPtr<ID3DBlob> blob;
+      D3DReadFileToBlob(L"ps.cso", &blob);
+
+      m_d3dDevice->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, m_pixelShader.GetAddressOf());
+      m_d3dContext->PSSetShader(m_pixelShader.Get(), NULL, 0);
+    }
+
+    // Vertices
+    std::vector<Vertex> m_vertices;
+
+    m_vertices.push_back({ {-1, -1, 0}, {0, 1} });
+    m_vertices.push_back({ {-1,  1, 0}, {0, 0} });
+    m_vertices.push_back({ { 1,  1, 0}, {1, 0} });
+    m_vertices.push_back({ { 1, -1, 0}, {1, 1} });
+
+    D3D11_BUFFER_DESC bd = {};
+    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    bd.Usage = D3D11_USAGE_DEFAULT;
+    bd.CPUAccessFlags = 0;
+    bd.MiscFlags = 0;
+    bd.ByteWidth = UINT(sizeof(Vertex) * m_vertices.size());
+    bd.StructureByteStride = sizeof(Vertex);
+
+    D3D11_SUBRESOURCE_DATA sd = {};
+    sd.pSysMem = m_vertices.data();
+    m_d3dDevice->CreateBuffer(&bd, &sd, m_vertexBuffer.GetAddressOf());
+
+    // Index buffer
+    std::vector<uint16_t> m_indices = { 0,1,3,1,2,3 };
+
+    D3D11_BUFFER_DESC ibd = {};
+    ibd.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    ibd.Usage = D3D11_USAGE_DEFAULT;
+    ibd.CPUAccessFlags = 0;
+    ibd.MiscFlags = 0;
+    ibd.ByteWidth = UINT(m_indices.size() * sizeof(uint16_t));
+    ibd.StructureByteStride = sizeof(uint16_t);
+
+    D3D11_SUBRESOURCE_DATA isd = {};
+    isd.pSysMem = m_indices.data();
+    m_d3dDevice->CreateBuffer(&ibd, &isd, m_indexBuffer.GetAddressOf());
+
+    // Sampler
+    D3D11_SAMPLER_DESC sampDesc = {};
+    sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    sampDesc.MinLOD = 0;
+    sampDesc.MaxLOD = 0;
+
+    //Create the sample state
+    m_d3dDevice->CreateSamplerState(&sampDesc, m_samplerState.GetAddressOf());
+
+    // Rest of the stuff to set
+    unsigned int stride = sizeof(Vertex);
+    unsigned int offset = 0;
+
+    m_d3dContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    m_d3dContext->IASetVertexBuffers(0, 1, m_vertexBuffer.GetAddressOf(), &stride, &offset);
+    m_d3dContext->IASetIndexBuffer(m_indexBuffer.Get(), DXGI_FORMAT_R16_UINT, 0u);
+    m_d3dContext->IASetInputLayout(m_inputLayout.Get());
+
+    m_d3dContext->PSSetSamplers(0, 1, m_samplerState.GetAddressOf());
+
+    // Create user resources as part of this thread
+    if (!OnUserCreate())
+      bActive = false;
+
+    auto tp1 = std::chrono::system_clock::now();
+    auto tp2 = std::chrono::system_clock::now();
+
+
+    // Start the thread
+    bActive = true;
+    //std::thread t = std::thread(&PixelGameEngine::EngineThread, this);
+
+    // Main message loop
+    MSG msg = {};
+    while (WM_QUIT != msg.message)
+    {
+      if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+      {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+      }
+      else
+      {
+        // Handle Timing
+        tp2 = std::chrono::system_clock::now();
+        std::chrono::duration<float> elapsedTime = tp2 - tp1;
+        tp1 = tp2;
+
+        // Our time per frame coefficient
+        float fElapsedTime = elapsedTime.count();
+
+        // Handle resize if needed
+        if (bResize)
+        {
+          tDX_DirectXCreateResources();
+          bResize = false;
+        }
+
+        // Handle User Input - Keyboard
+        for (int i = 0; i < 256; i++)
+        {
+          pKeyboardState[i].bPressed = false;
+          pKeyboardState[i].bReleased = false;
+
+          if (pKeyNewState[i] != pKeyOldState[i])
+          {
+            if (pKeyNewState[i])
+            {
+              pKeyboardState[i].bPressed = !pKeyboardState[i].bHeld;
+              pKeyboardState[i].bHeld = true;
+            }
+            else
+            {
+              pKeyboardState[i].bReleased = true;
+              pKeyboardState[i].bHeld = false;
+            }
+          }
+
+          pKeyOldState[i] = pKeyNewState[i];
+        }
+
+        // Handle User Input - Mouse
+        for (int i = 0; i < 5; i++)
+        {
+          pMouseState[i].bPressed = false;
+          pMouseState[i].bReleased = false;
+
+          if (pMouseNewState[i] != pMouseOldState[i])
+          {
+            if (pMouseNewState[i])
+            {
+              pMouseState[i].bPressed = !pMouseState[i].bHeld;
+              pMouseState[i].bHeld = true;
+            }
+            else
+            {
+              pMouseState[i].bReleased = true;
+              pMouseState[i].bHeld = false;
+            }
+          }
+
+          pMouseOldState[i] = pMouseNewState[i];
+        }
+
+        // Cache mouse coordinates so they remain
+        // consistent during frame
+        nMousePosX = nMousePosXcache;
+        nMousePosY = nMousePosYcache;
+
+        nMouseWheelDelta = nMouseWheelDeltaCache;
+        nMouseWheelDeltaCache = 0;
+
+#ifdef T_DBG_OVERDRAW
+        tDX::Sprite::nOverdrawCount = 0;
 #endif
 
-    // Wait for thread to be exited
-    t.join();
+        // Handle Frame Update
+        if (!OnUserUpdate(fElapsedTime))
+          bActive = false;
+
+        // TODO: UpdateSubresource is not optimal here, Map would be better
+        m_d3dContext->UpdateSubresource(m_texture.Get(), 0, NULL, pDefaultDrawTarget->GetData(), pDefaultDrawTarget->width * 4, 0);
+
+        m_d3dContext->DrawIndexed(6, 0, 0);
+        m_swapChain->Present(0, 0);
+
+        // Update Title Bar
+        fFrameTimer += fElapsedTime;
+        nFrameCount++;
+        if (fFrameTimer >= 1.0f)
+        {
+          fFrameTimer -= 1.0f;
+
+          std::string sTitle = "tucna.net - Pixel Game Engine - " + sAppName + " - FPS: " + std::to_string(nFrameCount);
+
+#ifdef UNICODE
+          SetWindowText(tDX_hWnd, ConvertS2W(sTitle).c_str());
+#else
+          SetWindowText(tDX_hWnd, sTitle.c_str());
+#endif
+
+          nFrameCount = 0;
+        }
+
+        if (!bActive)
+          break;
+      }
+    }
+
+    OnUserDestroy();
+
+    // Finish rendering
+    ID3D11RenderTargetView* nullViews[] = { nullptr };
+    m_d3dContext->OMSetRenderTargets(_countof(nullViews), nullViews, nullptr);
+
+    m_renderTargetView.Reset();
+    m_texture.Reset();
+    m_textureView.Reset();
+
+    m_d3dContext->Flush();
+
+    CoUninitialize();
+
     return tDX::OK;
   }
 
@@ -1626,7 +1832,7 @@ namespace tDX
 
     // If device already exists recreate resources
     if (m_d3dDevice)
-      bAtomResize = true;
+      bResize = true;
   }
 
   void PixelGameEngine::tDX_UpdateMouseWheel(int32_t delta)
@@ -1655,225 +1861,6 @@ namespace tDX
       nMousePosXcache = 0;
     if (nMousePosYcache < 0)
       nMousePosYcache = 0;
-  }
-
-  void PixelGameEngine::EngineThread()
-  {
-    SetThreadDescription(GetCurrentThread(), L"Engine thread");
-
-    // VS setup
-    {
-      Microsoft::WRL::ComPtr<ID3DBlob> blob;
-      D3DReadFileToBlob(L"vs.cso", &blob);
-
-      m_d3dDevice->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, m_vertexShader.GetAddressOf());
-
-      const D3D11_INPUT_ELEMENT_DESC ied[] =
-      {
-        { "Position",0,DXGI_FORMAT_R32G32B32_FLOAT,0,D3D11_APPEND_ALIGNED_ELEMENT,D3D11_INPUT_PER_VERTEX_DATA,0 },
-        { "TexCoord",0,DXGI_FORMAT_R32G32_FLOAT   ,0,D3D11_APPEND_ALIGNED_ELEMENT,D3D11_INPUT_PER_VERTEX_DATA,0 }
-      };
-
-      m_d3dDevice->CreateInputLayout(ied, (UINT)std::size(ied), blob->GetBufferPointer(), blob->GetBufferSize(), m_inputLayout.GetAddressOf());
-      m_d3dContext->VSSetShader(m_vertexShader.Get(), NULL, 0);
-    }
-
-    // PS setup
-    {
-      Microsoft::WRL::ComPtr<ID3DBlob> blob;
-      D3DReadFileToBlob(L"ps.cso", &blob);
-
-      m_d3dDevice->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, m_pixelShader.GetAddressOf());
-      m_d3dContext->PSSetShader(m_pixelShader.Get(), NULL, 0);
-    }
-
-    // Vertices
-    std::vector<Vertex> m_vertices;
-
-    m_vertices.push_back({ {-1, -1, 0}, {0, 1} });
-    m_vertices.push_back({ {-1,  1, 0}, {0, 0} });
-    m_vertices.push_back({ { 1,  1, 0}, {1, 0} });
-    m_vertices.push_back({ { 1, -1, 0}, {1, 1} });
-
-    D3D11_BUFFER_DESC bd = {};
-    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    bd.Usage = D3D11_USAGE_DEFAULT;
-    bd.CPUAccessFlags = 0;
-    bd.MiscFlags = 0;
-    bd.ByteWidth = UINT(sizeof(Vertex) * m_vertices.size());
-    bd.StructureByteStride = sizeof(Vertex);
-
-    D3D11_SUBRESOURCE_DATA sd = {};
-    sd.pSysMem = m_vertices.data();
-    m_d3dDevice->CreateBuffer(&bd, &sd, m_vertexBuffer.GetAddressOf());
-
-    // Index buffer
-    std::vector<uint16_t> m_indices = { 0,1,3,1,2,3 };
-
-    D3D11_BUFFER_DESC ibd = {};
-    ibd.BindFlags = D3D11_BIND_INDEX_BUFFER;
-    ibd.Usage = D3D11_USAGE_DEFAULT;
-    ibd.CPUAccessFlags = 0;
-    ibd.MiscFlags = 0;
-    ibd.ByteWidth = UINT(m_indices.size() * sizeof(uint16_t));
-    ibd.StructureByteStride = sizeof(uint16_t);
-
-    D3D11_SUBRESOURCE_DATA isd = {};
-    isd.pSysMem = m_indices.data();
-    m_d3dDevice->CreateBuffer(&ibd, &isd, m_indexBuffer.GetAddressOf());
-
-    // Sampler
-    D3D11_SAMPLER_DESC sampDesc = {};
-    sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
-    sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
-    sampDesc.MinLOD = 0;
-    sampDesc.MaxLOD = 0;
-
-    //Create the sample state
-    m_d3dDevice->CreateSamplerState(&sampDesc, m_samplerState.GetAddressOf());
-
-    // Rest of the stuff to set
-    unsigned int stride = sizeof(Vertex);
-    unsigned int offset = 0;
-
-    m_d3dContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    m_d3dContext->IASetVertexBuffers(0, 1, m_vertexBuffer.GetAddressOf(), &stride, &offset);
-    m_d3dContext->IASetIndexBuffer(m_indexBuffer.Get(), DXGI_FORMAT_R16_UINT, 0u);
-    m_d3dContext->IASetInputLayout(m_inputLayout.Get());
-
-    m_d3dContext->PSSetSamplers(0, 1, m_samplerState.GetAddressOf());
-
-    // Create user resources as part of this thread
-    if (!OnUserCreate())
-      bAtomActive = false;
-
-    auto tp1 = std::chrono::system_clock::now();
-    auto tp2 = std::chrono::system_clock::now();
-
-    while (bAtomActive)
-    {
-      // Run as fast as possible
-      while (bAtomActive)
-      {
-        // Handle Timing
-        tp2 = std::chrono::system_clock::now();
-        std::chrono::duration<float> elapsedTime = tp2 - tp1;
-        tp1 = tp2;
-
-        // Our time per frame coefficient
-        float fElapsedTime = elapsedTime.count();
-
-        // Handle resize if needed
-        if (bAtomResize)
-        {
-          tDX_DirectXCreateResources();
-          bAtomResize = false;
-        }
-
-        // Handle User Input - Keyboard
-        for (int i = 0; i < 256; i++)
-        {
-          pKeyboardState[i].bPressed = false;
-          pKeyboardState[i].bReleased = false;
-
-          if (pKeyNewState[i] != pKeyOldState[i])
-          {
-            if (pKeyNewState[i])
-            {
-              pKeyboardState[i].bPressed = !pKeyboardState[i].bHeld;
-              pKeyboardState[i].bHeld = true;
-            }
-            else
-            {
-              pKeyboardState[i].bReleased = true;
-              pKeyboardState[i].bHeld = false;
-            }
-          }
-
-          pKeyOldState[i] = pKeyNewState[i];
-        }
-
-        // Handle User Input - Mouse
-        for (int i = 0; i < 5; i++)
-        {
-          pMouseState[i].bPressed = false;
-          pMouseState[i].bReleased = false;
-
-          if (pMouseNewState[i] != pMouseOldState[i])
-          {
-            if (pMouseNewState[i])
-            {
-              pMouseState[i].bPressed = !pMouseState[i].bHeld;
-              pMouseState[i].bHeld = true;
-            }
-            else
-            {
-              pMouseState[i].bReleased = true;
-              pMouseState[i].bHeld = false;
-            }
-          }
-
-          pMouseOldState[i] = pMouseNewState[i];
-        }
-
-        // Cache mouse coordinates so they remain
-        // consistent during frame
-        nMousePosX = nMousePosXcache;
-        nMousePosY = nMousePosYcache;
-
-        nMouseWheelDelta = nMouseWheelDeltaCache;
-        nMouseWheelDeltaCache = 0;
-
-#ifdef T_DBG_OVERDRAW
-        tDX::Sprite::nOverdrawCount = 0;
-#endif
-
-        // Handle Frame Update
-        if (!OnUserUpdate(fElapsedTime))
-          bAtomActive = false;
-
-        // TODO: UpdateSubresource is not optimal here, Map would be better
-        m_d3dContext->UpdateSubresource(m_texture.Get(), 0, NULL, pDefaultDrawTarget->GetData(), pDefaultDrawTarget->width * 4, 0);
-
-        m_d3dContext->DrawIndexed(6, 0, 0);
-        m_swapChain->Present(0, 0);
-
-        // Update Title Bar
-        fFrameTimer += fElapsedTime;
-        nFrameCount++;
-        if (fFrameTimer >= 1.0f)
-        {
-          fFrameTimer -= 1.0f;
-
-          std::string sTitle = "tucna.net - Pixel Game Engine - " + sAppName + " - FPS: " + std::to_string(nFrameCount);
-#if defined(_WIN32)
-#ifdef UNICODE
-          SetWindowText(tDX_hWnd, ConvertS2W(sTitle).c_str());
-#else
-          SetWindowText(tDX_hWnd, sTitle.c_str());
-#endif
-#endif
-
-          nFrameCount = 0;
-        }
-      }
-
-      // Allow the user to free resources if they have overrided the destroy function
-      if (OnUserDestroy())
-      {
-        // User has permitted destroy, so exit and clean up
-      }
-      else
-      {
-        // User denied destroy for some reason, so continue running
-        bAtomActive = true;
-      }
-    }
-
-    PostMessage(tDX_hWnd, WM_DESTROY, 0, 0);
   }
 
 #if defined (_WIN32)
@@ -2183,7 +2170,6 @@ namespace tDX
     case WM_RBUTTONUP:	sge->pMouseNewState[1] = false; return 0;
     case WM_MBUTTONDOWN:sge->pMouseNewState[2] = true; return 0;
     case WM_MBUTTONUP:	sge->pMouseNewState[2] = false;	return 0;
-    case WM_CLOSE:		  bAtomActive = false; return 0;
     case WM_DESTROY:	  PostQuitMessage(0); return 0;
     }
     return DefWindowProc(hWnd, uMsg, wParam, lParam);
@@ -2192,8 +2178,8 @@ namespace tDX
 
   // Need a couple of statics as these are singleton instances
   // read from multiple locations
-  std::atomic<bool> PixelGameEngine::bAtomActive{ false };
-  std::atomic<bool> PixelGameEngine::bAtomResize{ false };
+  bool PixelGameEngine::bActive{ false };
+  bool PixelGameEngine::bResize{ false };
   std::map<size_t, uint8_t> PixelGameEngine::mapKeys;
   tDX::PixelGameEngine* tDX::PGEX::pge = nullptr;
 #ifdef T_DBG_OVERDRAW
