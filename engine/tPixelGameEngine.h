@@ -455,14 +455,11 @@ namespace tDX // tucna - DirectX
     bool tDX_DirectXCreateDevice();
     void tDX_ConstructFontSheet();
 
-
-#if defined(_WIN32)
     // Windows specific window handling
     HWND tDX_hWnd = nullptr;
     HWND tDX_WindowCreate();
     std::wstring wsAppName;
     static LRESULT CALLBACK tDX_WindowEvent(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-#endif
   };
 
 
@@ -531,23 +528,16 @@ namespace tDX
 
   //==========================================================
 
-#if defined(_WIN32)
   std::wstring ConvertS2W(std::string s)
   {
-#ifdef __MINGW32__
-    wchar_t *buffer = new wchar_t[s.length() + 1];
-    mbstowcs(buffer, s.c_str(), s.length());
-    buffer[s.length()] = L'\0';
-#else
     int count = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, NULL, 0);
     wchar_t* buffer = new wchar_t[count];
     MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, buffer, count);
-#endif
+
     std::wstring w(buffer);
     delete[] buffer;
     return w;
   }
-#endif
 
   Sprite::Sprite()
   {
@@ -642,7 +632,6 @@ namespace tDX
   {
     UNUSED(pack);
 
-#if defined(_WIN32)
     Gdiplus::Bitmap *bmp = nullptr;
     if (pack != nullptr)
     {
@@ -670,7 +659,6 @@ namespace tDX
       }
     delete bmp;
     return tDX::OK;
-#endif
   }
 
   void Sprite::SetSampleMode(tDX::Sprite::Mode mode)
@@ -927,7 +915,7 @@ namespace tDX
     if (nPixelWidth == 0 || nPixelHeight == 0 || nScreenWidth == 0 || nScreenHeight == 0)
       return tDX::FAIL;
 
-#if defined(_WIN32) && defined(UNICODE) && !defined(__MINGW32__)
+#if defined(UNICODE) && !defined(__MINGW32__)
     wsAppName = ConvertS2W(sAppName);
 #endif
     // Load the default font sheet
@@ -1863,7 +1851,6 @@ namespace tDX
       nMousePosYcache = 0;
   }
 
-#if defined (_WIN32)
   // Thanks @MaGetzUb for this, which allows sprites to be defined
   // at construction, by initialising the GDI subsystem
   static class GDIPlusStartup
@@ -1876,8 +1863,6 @@ namespace tDX
       Gdiplus::GdiplusStartup(&token, &startupInput, NULL);
     };
   } gdistartup;
-#endif
-
 
   void PixelGameEngine::tDX_ConstructFontSheet()
   {
@@ -1918,7 +1903,6 @@ namespace tDX
     }
   }
 
-#if defined(_WIN32)
   HWND PixelGameEngine::tDX_WindowCreate()
   {
     WNDCLASS wc = {};
@@ -2174,7 +2158,7 @@ namespace tDX
     }
     return DefWindowProc(hWnd, uMsg, wParam, lParam);
   }
-#endif
+
 
   // Need a couple of statics as these are singleton instances
   // read from multiple locations
