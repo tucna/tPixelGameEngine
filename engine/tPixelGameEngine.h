@@ -959,9 +959,15 @@ namespace tDX
 
   tDX::rcode PixelGameEngine::Start()
   {
+    // Create DirectX device
+    tDX_DirectXCreateDevice();
+
     // Construct the window
     if (!tDX_WindowCreate())
       return tDX::FAIL;
+
+    // Create resources changed when whindow size is changed
+    tDX_DirectXCreateResources();
 
     // Start the thread
     bAtomActive = true;
@@ -1653,11 +1659,7 @@ namespace tDX
 
   void PixelGameEngine::EngineThread()
   {
-    // Create DirectX device and related
-    tDX_DirectXCreateDevice();
-
-    // Create resources changed when whindow size is changed
-    tDX_DirectXCreateResources();
+    SetThreadDescription(GetCurrentThread(), L"Engine thread");
 
     // VS setup
     {
