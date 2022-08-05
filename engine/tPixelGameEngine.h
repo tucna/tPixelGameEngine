@@ -482,17 +482,17 @@ namespace tDX // tucna - DirectX
   Object Oriented Mode
   ~~~~~~~~~~~~~~~~~~~~
 
-  If the olcPixelGameEngine.h is called from several sources it can cause
+  If the tPixelGameEngine.h is called from several sources it can cause
   multiple definitions of objects. To prevent this, ONLY ONE of the pathways
   to including this file must have T_PGE_APPLICATION defined before it. This prevents
   the definitions being duplicated.
 
-  If all else fails, create a file called "olcPixelGameEngine.cpp" with the following
-  two lines. Then you can just #include "olcPixelGameEngine.h" as normal without worrying
+  If all else fails, create a file called "tPixelGameEngine.cpp" with the following
+  two lines. Then you can just #include "tPixelGameEngine.h" as normal without worrying
   about defining things. Dont forget to include that cpp file as part of your build!
 
   #define T_PGE_APPLICATION
-  #include "olcPixelGameEngine.h"
+  #include "tPixelGameEngine.h"
 
 */
 
@@ -754,7 +754,7 @@ namespace tDX
     {
       sResourceFile e;
       e.nSize = (uint32_t)_gfs::file_size(file);
-      e.nOffset = 0; // Unknown at this stage			
+      e.nOffset = 0; // Unknown at this stage
       mapFiles[file] = e;
       return true;
     }
@@ -954,7 +954,7 @@ namespace tDX
     // VS setup
     {
       Microsoft::WRL::ComPtr<ID3DBlob> blob;
-      D3DReadFileToBlob(L"vs.cso", &blob);
+      D3DReadFileToBlob(L"engine/vs.cso", &blob);
 
       m_d3dDevice->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, m_vertexShader.GetAddressOf());
 
@@ -971,7 +971,7 @@ namespace tDX
     // PS setup
     {
       Microsoft::WRL::ComPtr<ID3DBlob> blob;
-      D3DReadFileToBlob(L"ps.cso", &blob);
+      D3DReadFileToBlob(L"engine/ps.cso", &blob);
 
       m_d3dDevice->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, m_pixelShader.GetAddressOf());
       m_d3dContext->PSSetShader(m_pixelShader.Get(), NULL, 0);
@@ -1136,8 +1136,24 @@ namespace tDX
         if (!OnUserUpdate(fElapsedTime))
           bActive = false;
 
-        // TODO: UpdateSubresource is not optimal here, Map would be better
-        m_d3dContext->UpdateSubresource(m_texture.Get(), 0, NULL, pDefaultDrawTarget->GetData(), pDefaultDrawTarget->width * 4, 0);
+        // Update texture to be rendered
+        D3D11_MAPPED_SUBRESOURCE mappedTexture = {};
+        m_d3dContext->Map(m_texture.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedTexture);
+
+        BYTE* mappedData = reinterpret_cast<BYTE*>(mappedTexture.pData);
+        tDX::Pixel* sourceData = pDrawTarget->GetData();
+
+        for (UINT row = 0; row < pDrawTarget->height; row++)
+        {
+          memcpy(mappedData, sourceData, pDrawTarget->width * 4);
+          mappedData += mappedTexture.RowPitch;
+          sourceData += pDrawTarget->width;
+        }
+
+        m_d3dContext->Unmap(m_texture.Get(), 0);
+
+        // Bind RT
+        m_d3dContext->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), NULL);
 
         m_d3dContext->DrawIndexed(6, 0, 0);
         m_swapChain->Present(0, 0);
@@ -1259,7 +1275,6 @@ namespace tDX
   bool PixelGameEngine::Draw(int32_t x, int32_t y, Pixel p)
   {
     if (!pDrawTarget) return false;
-
 
     if (nPixelMode == Pixel::Mode::NORMAL)
     {
@@ -2035,6 +2050,7 @@ namespace tDX
       swapChainDesc.SampleDesc.Quality = 0;
       swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
       swapChainDesc.BufferCount = backBufferCount;
+      swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 
       DXGI_SWAP_CHAIN_FULLSCREEN_DESC fsSwapChainDesc = {};
       fsSwapChainDesc.Windowed = TRUE;
@@ -2058,7 +2074,6 @@ namespace tDX
 
     // Create a view interface on the rendertarget to use on bind.
     m_d3dDevice->CreateRenderTargetView(backBuffer.Get(), nullptr, m_renderTargetView.ReleaseAndGetAddressOf());
-    m_d3dContext->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), NULL);
 
     // Texture setup
     int32_t fWidth = pDefaultDrawTarget->width;
@@ -2073,7 +2088,7 @@ namespace tDX
     textureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     textureDescription.SampleDesc.Count = 1;
     textureDescription.SampleDesc.Quality = 0;
-    textureDescription.Usage = D3D11_USAGE_DEFAULT; //D3D11_USAGE_DYNAMIC;
+    textureDescription.Usage = D3D11_USAGE_DYNAMIC;;
     textureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     textureDescription.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     textureDescription.MiscFlags = 0;
