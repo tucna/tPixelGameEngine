@@ -2088,7 +2088,7 @@ namespace tDX
     textureDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     textureDescription.SampleDesc.Count = 1;
     textureDescription.SampleDesc.Quality = 0;
-    textureDescription.Usage = D3D11_USAGE_DYNAMIC;;
+    textureDescription.Usage = D3D11_USAGE_DYNAMIC;
     textureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     textureDescription.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     textureDescription.MiscFlags = 0;

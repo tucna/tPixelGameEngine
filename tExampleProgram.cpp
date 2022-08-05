@@ -1,5 +1,5 @@
 #define T_PGE_APPLICATION
-#include "tPixelGameEngine.h"
+#include "engine/tPixelGameEngine.h"
 
 class Example : public tDX::PixelGameEngine
 {
