@@ -1942,7 +1942,7 @@ namespace tDX
     nWindowHeight = (LONG)nScreenHeight * (LONG)nPixelHeight;
 
     // Define window furniture
-    DWORD dwExStyle = WS_EX_APPWINDOW | WS_EX_WINDOWEDGE;
+    DWORD dwExStyle = WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_NOREDIRECTIONBITMAP;
     DWORD dwStyle = WS_CAPTION | WS_SYSMENU | WS_VISIBLE | WS_THICKFRAME;
 
     int nCosmeticOffset = 30;
